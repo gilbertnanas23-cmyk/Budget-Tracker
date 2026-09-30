@@ -11,6 +11,10 @@
   <link rel="stylesheet" href="style.css">
   <!-- Chart.js CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Firebase SDKs (Compat v10 for universal browser support) -->
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-analytics-compat.js"></script>
 </head>
 <body data-theme="light">
   <!-- Background subtle gradient circles -->
@@ -66,9 +70,9 @@
             <span class="theme-text">Mode Pastel</span>
           </button>
         </div>
-        <div class="user-status-pill">
-          <span class="status-dot"></span>
-          <span>Data Tersimpan Offline</span>
+        <div class="user-status-pill" id="syncStatusPill" title="Status Sinkronisasi Firebase Cloud">
+          <span class="status-dot connected" id="syncStatusDot"></span>
+          <span id="syncStatusText">Cloud Terhubung</span>
         </div>
       </div>
     </aside>
@@ -88,6 +92,10 @@
         </div>
 
         <div class="header-actions">
+          <a href="#pengaturan" class="cloud-status-badge" id="headerCloudBadge" title="Status Sinkronisasi Firebase Cloud (Klik untuk Pengaturan)">
+            <span class="status-dot connected" id="headerSyncDot"></span>
+            <span class="cloud-status-text" id="headerSyncText">Cloud Sync</span>
+          </a>
           <button id="quickAddIncomeBtn" class="btn btn-secondary btn-with-icon" title="Catat Pemasukan Baru">
             <span class="btn-icon">💰</span>
             <span class="btn-text">Catat Pemasukan</span>
@@ -612,6 +620,52 @@
               <h2 class="card-title">Pengaturan & Cadangan Data</h2>
             </div>
             <span class="card-subtitle">Kelola dan amankan data Budgetin Anda</span>
+          </div>
+
+          <!-- Cloud Sync Settings Card -->
+          <div class="cloud-sync-box" id="cloudSyncSettingsBox">
+            <div class="cloud-sync-header">
+              <div class="cloud-sync-title-wrap">
+                <span class="cloud-icon-big">☁️</span>
+                <div>
+                  <h4 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: var(--text-main);">Sinkronisasi Realtime Firebase</h4>
+                  <p style="margin: 2px 0 0 0; font-size: 0.8rem; color: var(--text-muted);">
+                    Project ID: <code>budget-tracker-8ec94</code>
+                  </p>
+                </div>
+              </div>
+              <div class="cloud-badge-state" id="cloudSettingsBadge">
+                <span class="status-dot connected" id="cloudBadgeDot"></span>
+                <span id="cloudBadgeLabel">Terhubung Real-time</span>
+              </div>
+            </div>
+
+            <div class="cloud-sync-details">
+              <div class="sync-detail-row">
+                <span>Status Koneksi Cloud</span>
+                <strong id="cloudDetailStatus" style="color: var(--text-main);">🟢 Aktif &amp; Sinkron (Realtime)</strong>
+              </div>
+              <div class="sync-detail-row">
+                <span>Terakhir Diperbarui</span>
+                <strong id="cloudLastSyncTime" style="color: var(--text-main);">Baru saja</strong>
+              </div>
+              <div class="sync-detail-row">
+                <span>ID Ruang Budget (Sync Code)</span>
+                <div class="sync-code-input-group">
+                  <input type="text" id="cloudSyncKeyInput" value="default_budget" placeholder="default_budget" title="Gunakan ID yang sama di perangkat lain untuk berbagi data">
+                  <button type="button" id="btnUpdateSyncKey" class="btn btn-outline" style="padding: 6px 12px; font-size: 0.82rem;">Ganti</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="cloud-sync-actions">
+              <button type="button" id="btnManualSync" class="btn btn-outline" style="font-size: 0.85rem;">
+                🔄 Sinkronkan Sekarang
+              </button>
+              <button type="button" id="btnUploadLocalToCloud" class="btn btn-secondary" style="font-size: 0.85rem;" title="Paksa unggah data di perangkat ini ke Cloud">
+                ⬆️ Unggah Data Lokal ke Cloud
+              </button>
+            </div>
           </div>
 
           <div class="settings-grid">

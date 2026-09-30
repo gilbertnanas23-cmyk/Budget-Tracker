@@ -57,7 +57,7 @@
     // Theme
     themeToggleBtn: document.getElementById('themeToggleBtn'),
     headerThemeBtn: document.getElementById('headerThemeBtn'),
-    
+
     // Circular Progress
     circleProgress: document.getElementById('circleProgress'),
     circleRemainingText: document.getElementById('circleRemainingText'),
@@ -67,7 +67,7 @@
     statusEmoji: document.getElementById('statusEmoji'),
     statusTitle: document.getElementById('statusTitle'),
     statusDesc: document.getElementById('statusDesc'),
-    
+
     // Hero Pills
     heroTotalBudget: document.getElementById('heroTotalBudget'),
     heroTotalSpent: document.getElementById('heroTotalSpent'),
@@ -189,7 +189,24 @@
     closeConfirmModalBtn: document.getElementById('closeConfirmModalBtn'),
 
     // Toast Container
-    toastContainer: document.getElementById('toastContainer')
+    toastContainer: document.getElementById('toastContainer'),
+
+    // Cloud Sync Elements
+    syncStatusPill: document.getElementById('syncStatusPill'),
+    syncStatusDot: document.getElementById('syncStatusDot'),
+    syncStatusText: document.getElementById('syncStatusText'),
+    headerCloudBadge: document.getElementById('headerCloudBadge'),
+    headerSyncDot: document.getElementById('headerSyncDot'),
+    headerSyncText: document.getElementById('headerSyncText'),
+    cloudSettingsBadge: document.getElementById('cloudSettingsBadge'),
+    cloudBadgeDot: document.getElementById('cloudBadgeDot'),
+    cloudBadgeLabel: document.getElementById('cloudBadgeLabel'),
+    cloudDetailStatus: document.getElementById('cloudDetailStatus'),
+    cloudLastSyncTime: document.getElementById('cloudLastSyncTime'),
+    cloudSyncKeyInput: document.getElementById('cloudSyncKeyInput'),
+    btnUpdateSyncKey: document.getElementById('btnUpdateSyncKey'),
+    btnManualSync: document.getElementById('btnManualSync'),
+    btnUploadLocalToCloud: document.getElementById('btnUploadLocalToCloud')
   };
 
   // Callback storage for generic confirmation modal
@@ -240,7 +257,7 @@
 
   const STORAGE_KEY = 'budgetin_user_data_v2';
 
-  function saveStateToStorage() {
+  function saveStateToLocalStorageOnly() {
     try {
       const dataToSave = {
         budget: state.budget,
@@ -252,6 +269,13 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
     } catch (err) {
       console.warn('Gagal menyimpan ke LocalStorage:', err);
+    }
+  }
+
+  function saveStateToStorage() {
+    saveStateToLocalStorageOnly();
+    if (!isApplyingRemoteUpdate) {
+      scheduleFirebaseUpload();
     }
   }
 
@@ -286,13 +310,300 @@
   }
 
   // ==========================================================================
+  // Firebase Realtime Cloud Synchronization
+  // ==========================================================================
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyD7bv61QRolDFwu8sYR9G-qGi1g4YYPF_A",
+    authDomain: "budget-tracker-8ec94.firebaseapp.com",
+    projectId: "budget-tracker-8ec94",
+    storageBucket: "budget-tracker-8ec94.firebasestorage.app",
+    messagingSenderId: "63477049953",
+    appId: "1:63477049953:web:2237691edad2d5591f5820",
+    measurementId: "G-T9K7EP77Q4"
+  };
+
+  const SYNC_KEY_STORAGE = 'budgetin_cloud_sync_key_v1';
+  let firebaseApp = null;
+  let db = null;
+  let firestoreUnsubscribe = null;
+  let syncDocRef = null;
+  let isApplyingRemoteUpdate = false;
+  let syncDebounceTimer = null;
+
+  function getSyncKey() {
+    return localStorage.getItem(SYNC_KEY_STORAGE) || 'default_budget';
+  }
+
+  function setSyncKey(newKey) {
+    const cleanKey = (newKey || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_') || 'default_budget';
+    localStorage.setItem(SYNC_KEY_STORAGE, cleanKey);
+    return cleanKey;
+  }
+
+  function updateSyncStatusUI(status, message) {
+    // status: 'connected' | 'syncing' | 'offline' | 'error'
+    const dotClass = status === 'connected' ? 'connected' : (status === 'syncing' ? 'syncing' : 'offline');
+
+    if (dom.syncStatusDot) dom.syncStatusDot.className = `status-dot ${dotClass}`;
+    if (dom.headerSyncDot) dom.headerSyncDot.className = `status-dot ${dotClass}`;
+    if (dom.cloudBadgeDot) dom.cloudBadgeDot.className = `status-dot ${dotClass}`;
+
+    if (dom.syncStatusText) {
+      dom.syncStatusText.textContent = message || (status === 'connected' ? 'Cloud Terhubung' : 'Offline');
+    }
+    if (dom.headerSyncText) {
+      dom.headerSyncText.textContent = status === 'connected' ? 'Tersinkron' : (status === 'syncing' ? 'Sinkron...' : 'Offline');
+    }
+    if (dom.cloudBadgeLabel) {
+      dom.cloudBadgeLabel.textContent = message || (status === 'connected' ? 'Terhubung Real-time' : 'Offline');
+    }
+    if (dom.cloudDetailStatus) {
+      if (status === 'connected') dom.cloudDetailStatus.innerHTML = '<span style="color: #10b981;">🟢 Aktif &amp; Sinkron (Realtime)</span>';
+      else if (status === 'syncing') dom.cloudDetailStatus.innerHTML = '<span style="color: #f59e0b;">🟡 Menyinkronkan...</span>';
+      else if (status === 'error') dom.cloudDetailStatus.innerHTML = '<span style="color: #ef4444;">🔴 Akses Ditolak (Cek Rules Firestore)</span>';
+      else dom.cloudDetailStatus.innerHTML = '<span style="color: var(--text-muted);">⚪ Mode Lokal / Offline</span>';
+    }
+  }
+
+  function updateLastSyncDisplay(isoString) {
+    if (!dom.cloudLastSyncTime) return;
+    if (!isoString) {
+      dom.cloudLastSyncTime.textContent = 'Belum pernah';
+      return;
+    }
+    try {
+      const d = new Date(isoString);
+      const timeStr = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const dateStr = d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+      dom.cloudLastSyncTime.textContent = `${timeStr} (${dateStr})`;
+    } catch (e) {
+      dom.cloudLastSyncTime.textContent = 'Baru saja';
+    }
+  }
+
+  function applyRemoteData(cloudData) {
+    if (!cloudData) return;
+    isApplyingRemoteUpdate = true;
+    try {
+      if (typeof cloudData.budget === 'number') {
+        state.budget = cloudData.budget;
+      }
+      if (typeof cloudData.savingsTarget === 'number') {
+        state.savingsTarget = cloudData.savingsTarget;
+      }
+      if (Array.isArray(cloudData.categories) && cloudData.categories.length > 0) {
+        state.categories = DEFAULT_CATEGORIES.map(defaultCat => {
+          const saved = cloudData.categories.find(c => c.id === defaultCat.id);
+          return saved ? { ...defaultCat, limit: Number(saved.limit) || 0 } : defaultCat;
+        });
+      }
+      if (Array.isArray(cloudData.transactions)) {
+        state.transactions = cloudData.transactions;
+      }
+
+      // Update local storage so offline access matches
+      saveStateToLocalStorageOnly();
+
+      // Update input fields if user is not actively typing in them
+      if (dom.budgetInput && document.activeElement !== dom.budgetInput) {
+        dom.budgetInput.value = state.budget > 0 ? formatRupiah(state.budget, false) : '';
+      }
+      if (dom.savingsInput && document.activeElement !== dom.savingsInput) {
+        dom.savingsInput.value = state.savingsTarget > 0 ? formatRupiah(state.savingsTarget, false) : '';
+      }
+
+      // Re-render UI components
+      const calc = getCalculations();
+      renderCircularIndicator(calc);
+      renderQuickStats(calc);
+      renderCategoryList(calc);
+      renderTransactions();
+      initOrUpdateCharts(calc);
+      renderAnnualAnalytics();
+
+      if (cloudData.updatedAt) {
+        updateLastSyncDisplay(cloudData.updatedAt);
+      }
+    } catch (err) {
+      console.error('Gagal menerapkan data dari cloud:', err);
+    } finally {
+      setTimeout(() => {
+        isApplyingRemoteUpdate = false;
+      }, 150);
+    }
+  }
+
+  function uploadStateToFirebase(isInitial = false) {
+    if (!db || !syncDocRef || isApplyingRemoteUpdate) return;
+
+    updateSyncStatusUI('syncing', 'Menyimpan ke Cloud...');
+
+    const payload = {
+      budget: Number(state.budget) || 0,
+      savingsTarget: Number(state.savingsTarget) || 0,
+      categories: state.categories.map(c => ({
+        id: c.id,
+        name: c.name,
+        limit: Number(c.limit) || 0
+      })),
+      transactions: state.transactions,
+      updatedAt: new Date().toISOString()
+    };
+
+    syncDocRef.set(payload, { merge: true })
+      .then(() => {
+        updateSyncStatusUI('connected', 'Cloud Terhubung');
+        updateLastSyncDisplay(payload.updatedAt);
+        if (isInitial) {
+          showToast('Data berhasil terhubung ke Firebase Cloud! ☁️', 'success');
+        }
+      })
+      .catch(err => {
+        console.warn('Gagal mengunggah data ke Firestore:', err);
+        if (err.code === 'permission-denied') {
+          updateSyncStatusUI('error', 'Izin Cloud Ditolak');
+          showToast('PENTING: Aktifkan Rules di Firebase Console -> Cloud Firestore -> Rules menjadi allow read, write: if true;', 'error');
+        } else {
+          updateSyncStatusUI('offline', 'Koneksi Cloud Terputus');
+        }
+      });
+  }
+
+  function scheduleFirebaseUpload() {
+    if (!db || !syncDocRef || isApplyingRemoteUpdate) return;
+    if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
+    syncDebounceTimer = setTimeout(() => {
+      uploadStateToFirebase(false);
+    }, 450);
+  }
+
+  function setupFirestoreListener() {
+    if (!db) return;
+    if (firestoreUnsubscribe) {
+      firestoreUnsubscribe();
+      firestoreUnsubscribe = null;
+    }
+
+    const currentKey = getSyncKey();
+    if (dom.cloudSyncKeyInput) {
+      dom.cloudSyncKeyInput.value = currentKey;
+    }
+
+    syncDocRef = db.collection('budget_spaces').doc(currentKey);
+    updateSyncStatusUI('syncing', 'Menghubungkan Cloud...');
+
+    firestoreUnsubscribe = syncDocRef.onSnapshot(
+      (docSnap) => {
+        if (docSnap.exists) {
+          const cloudData = docSnap.data();
+          applyRemoteData(cloudData);
+          updateSyncStatusUI('connected', 'Cloud Terhubung');
+        } else {
+          // New doc: initial upload from current local state
+          uploadStateToFirebase(true);
+        }
+      },
+      (err) => {
+        console.warn('Firestore snapshot error:', err);
+        if (err.code === 'permission-denied') {
+          updateSyncStatusUI('error', 'Izin Firestore Ditolak');
+          showToast('Firestore Rules belum diaktifkan. Buka Firebase Console > Firestore > Rules.', 'error');
+        } else {
+          updateSyncStatusUI('offline', 'Mode Offline / Lokal');
+        }
+      }
+    );
+  }
+
+  function initFirebaseSync() {
+    if (typeof firebase === 'undefined') {
+      console.warn('Firebase SDK tidak dimuat.');
+      updateSyncStatusUI('offline', 'Firebase SDK Offline');
+      return;
+    }
+
+    try {
+      if (!firebase.apps || !firebase.apps.length) {
+        firebaseApp = firebase.initializeApp(firebaseConfig);
+        try {
+          if (typeof firebase.analytics === 'function') {
+            firebase.analytics();
+          }
+        } catch (analyticsErr) {
+          // Analytics can be blocked by ad-blocker or file:// origin, safe to ignore
+        }
+      } else {
+        firebaseApp = firebase.app();
+      }
+
+      db = firebase.firestore();
+
+      // Enable offline persistence
+      try {
+        db.enablePersistence({ synchronizeTabs: true }).catch((err) => {
+          // May fail on multi-tab or unsupported browser, safe to ignore
+        });
+      } catch (persistenceErr) {
+        // safe to ignore
+      }
+
+      setupFirestoreListener();
+    } catch (err) {
+      console.error('Inisialisasi Firebase gagal:', err);
+      updateSyncStatusUI('offline', 'Gagal Sambung Firebase');
+    }
+  }
+
+  function handleUpdateSyncKey() {
+    if (!dom.cloudSyncKeyInput) return;
+    const inputVal = dom.cloudSyncKeyInput.value.trim();
+    if (!inputVal) {
+      showToast('ID Ruang Sync tidak boleh kosong', 'error');
+      return;
+    }
+    const cleanKey = setSyncKey(inputVal);
+    dom.cloudSyncKeyInput.value = cleanKey;
+    showToast(`Beralih ke ID Ruang: "${cleanKey}"... 🔄`, 'info');
+    setupFirestoreListener();
+  }
+
+  function handleManualSync() {
+    if (!db || !syncDocRef) {
+      initFirebaseSync();
+      return;
+    }
+    updateSyncStatusUI('syncing', 'Menyinkronkan...');
+    syncDocRef.get()
+      .then(docSnap => {
+        if (docSnap.exists) {
+          applyRemoteData(docSnap.data());
+          showToast('Data berhasil dimutakhirkan dari Cloud! ☁️', 'success');
+        } else {
+          uploadStateToFirebase(true);
+        }
+      })
+      .catch(err => {
+        showToast('Gagal sinkron: ' + err.message, 'error');
+        updateSyncStatusUI('error', 'Gagal Sinkron');
+      });
+  }
+
+  function handleUploadLocalToCloud() {
+    if (!db || !syncDocRef) {
+      initFirebaseSync();
+    }
+    uploadStateToFirebase(true);
+  }
+
+  // ==========================================================================
   // Toast Notifications
   // ==========================================================================
 
   function showToast(message, type = 'success') {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
-    
+
     let icon = '✨';
     if (type === 'error') icon = '⚠️';
     if (type === 'info') icon = 'ℹ️';
@@ -478,8 +789,8 @@
     // Search filter
     if (state.searchQuery.trim()) {
       const q = state.searchQuery.toLowerCase().trim();
-      list = list.filter(tx => 
-        (tx.name && tx.name.toLowerCase().includes(q)) || 
+      list = list.filter(tx =>
+        (tx.name && tx.name.toLowerCase().includes(q)) ||
         (tx.note && tx.note.toLowerCase().includes(q)) ||
         (tx.category && tx.category.toLowerCase().includes(q))
       );
@@ -732,7 +1043,7 @@
         d.setDate(d.getDate() - i);
         const isoDate = d.toISOString().split('T')[0];
         const dayName = d.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' });
-        
+
         weeklyLabels.push(dayName);
 
         // Sum transactions for this day
@@ -1099,7 +1410,7 @@
             },
             tooltip: {
               callbacks: {
-                title: function(items) {
+                title: function (items) {
                   const idx = items[0].dataIndex;
                   return `${MONTH_NAMES_ID[idx]} ${state.selectedAnnualYear}`;
                 },
@@ -1140,7 +1451,7 @@
     state.theme = theme;
     document.body.setAttribute('data-theme', theme);
     const isDark = theme === 'dark';
-    
+
     // Update theme toggle icons and chart styles
     if (dom.headerThemeBtn) {
       dom.headerThemeBtn.innerHTML = isDark ? '<span>☀️</span>' : '<span>🌙</span>';
@@ -1294,7 +1605,7 @@
     dom.modalExpenseAmount.value = '';
     dom.modalExpenseDate.value = new Date().toISOString().split('T')[0];
     dom.modalExpenseNote.value = '';
-    
+
     setModalFormType(defaultType);
 
     dom.expenseModal.classList.add('open');
@@ -1484,7 +1795,7 @@
         state.savingsTarget = 0;
         state.categories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
         state.transactions = [];
-        
+
         dom.budgetInput.value = '';
         dom.savingsInput.value = '';
 
@@ -1534,7 +1845,7 @@
     // Inline Type Toggle buttons
     const inlineTypeButtons = document.querySelectorAll('#inlineTypeToggle .type-pill-btn');
     inlineTypeButtons.forEach(btn => {
-      btn.addEventListener('click', function() {
+      btn.addEventListener('click', function () {
         const type = this.getAttribute('data-type');
         inlineTypeButtons.forEach(b => b.classList.remove('active'));
         this.classList.add('active');
@@ -1545,7 +1856,7 @@
     // Modal Type Toggle buttons
     const modalTypeButtons = document.querySelectorAll('#modalTypeToggle .type-pill-btn');
     modalTypeButtons.forEach(btn => {
-      btn.addEventListener('click', function() {
+      btn.addEventListener('click', function () {
         const type = this.getAttribute('data-modal-type');
         modalTypeButtons.forEach(b => b.classList.remove('active'));
         this.classList.add('active');
@@ -1710,7 +2021,7 @@
 
     // 9. Quick Amount Chips
     document.querySelectorAll('.quick-amount-chips .chip-btn').forEach(btn => {
-      btn.addEventListener('click', function(e) {
+      btn.addEventListener('click', function (e) {
         e.preventDefault();
         const container = this.closest('.quick-amount-chips');
         if (!container) return;
@@ -1729,7 +2040,7 @@
     // 10. Category Preset Allocation Buttons
     const preset503020Btn = document.getElementById('preset503020');
     if (preset503020Btn) {
-      preset503020Btn.addEventListener('click', function() {
+      preset503020Btn.addEventListener('click', function () {
         const total = state.budget || 0;
         const weights = {
           Makan: 0.30,
@@ -1753,7 +2064,7 @@
 
     const presetEvenBtn = document.getElementById('presetEven');
     if (presetEvenBtn) {
-      presetEvenBtn.addEventListener('click', function() {
+      presetEvenBtn.addEventListener('click', function () {
         const total = state.budget || 0;
         const alloc = Math.floor(total / 7 / 1000) * 1000;
         const inputs = dom.categoryLimitsInputsContainer.querySelectorAll('input[data-cat-id]');
@@ -1766,7 +2077,7 @@
 
     const presetZeroBtn = document.getElementById('presetZero');
     if (presetZeroBtn) {
-      presetZeroBtn.addEventListener('click', function() {
+      presetZeroBtn.addEventListener('click', function () {
         const inputs = dom.categoryLimitsInputsContainer.querySelectorAll('input[data-cat-id]');
         inputs.forEach(inp => {
           inp.value = '0';
@@ -1779,6 +2090,19 @@
     if (dom.expenseDate) {
       dom.expenseDate.value = new Date().toISOString().split('T')[0];
     }
+
+    // 11. Cloud Firebase Sync Listeners
+    if (dom.btnUpdateSyncKey) dom.btnUpdateSyncKey.addEventListener('click', handleUpdateSyncKey);
+    if (dom.cloudSyncKeyInput) {
+      dom.cloudSyncKeyInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          handleUpdateSyncKey();
+        }
+      });
+    }
+    if (dom.btnManualSync) dom.btnManualSync.addEventListener('click', handleManualSync);
+    if (dom.btnUploadLocalToCloud) dom.btnUploadLocalToCloud.addEventListener('click', handleUploadLocalToCloud);
   }
 
   // Expose global methods for inline HTML onclick handlers
@@ -1787,12 +2111,14 @@
     confirmDeleteTx: confirmDeleteTx,
     openAddExpenseModal: () => openAddExpenseModal('expense'),
     openAddIncomeModal: () => openAddExpenseModal('income'),
-    openAddExpenseModalForCategory: function(catId) {
+    openAddExpenseModalForCategory: function (catId) {
       openAddExpenseModal('expense');
       if (dom.modalExpenseCategory) {
         dom.modalExpenseCategory.value = catId;
       }
-    }
+    },
+    syncCloudNow: handleManualSync,
+    uploadLocalToCloud: handleUploadLocalToCloud
   };
 
   // --- Bootstrap App ---
@@ -1816,6 +2142,9 @@
 
       // Initial render
       refreshApp();
+
+      // Start Firebase Realtime Cloud Synchronization
+      initFirebaseSync();
     } catch (err) {
       console.error('Fatal initialization caught safely:', err);
     }
