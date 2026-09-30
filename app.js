@@ -206,7 +206,44 @@
     cloudSyncKeyInput: document.getElementById('cloudSyncKeyInput'),
     btnUpdateSyncKey: document.getElementById('btnUpdateSyncKey'),
     btnManualSync: document.getElementById('btnManualSync'),
-    btnUploadLocalToCloud: document.getElementById('btnUploadLocalToCloud')
+    btnUploadLocalToCloud: document.getElementById('btnUploadLocalToCloud'),
+
+    // Auth & User Profile Elements
+    authModal: document.getElementById('authModal'),
+    closeAuthModalBtn: document.getElementById('closeAuthModalBtn'),
+    tabBtnSignIn: document.getElementById('tabBtnSignIn'),
+    tabBtnSignUp: document.getElementById('tabBtnSignUp'),
+    signInForm: document.getElementById('signInForm'),
+    signUpForm: document.getElementById('signUpForm'),
+    signInEmail: document.getElementById('signInEmail'),
+    signInPassword: document.getElementById('signInPassword'),
+    signInSubmitBtn: document.getElementById('signInSubmitBtn'),
+    signUpName: document.getElementById('signUpName'),
+    signUpEmail: document.getElementById('signUpEmail'),
+    signUpPassword: document.getElementById('signUpPassword'),
+    signUpPasswordConfirm: document.getElementById('signUpPasswordConfirm'),
+    signUpSubmitBtn: document.getElementById('signUpSubmitBtn'),
+    btnGoogleSignIn: document.getElementById('btnGoogleSignIn'),
+    btnContinueGuest: document.getElementById('btnContinueGuest'),
+    forgotPasswordBtn: document.getElementById('forgotPasswordBtn'),
+    headerAuthBtn: document.getElementById('headerAuthBtn'),
+    headerUserAvatar: document.getElementById('headerUserAvatar'),
+    headerUserName: document.getElementById('headerUserName'),
+    sidebarUserProfileCard: document.getElementById('sidebarUserProfileCard'),
+    sidebarUserAvatar: document.getElementById('sidebarUserAvatar'),
+    sidebarUserName: document.getElementById('sidebarUserName'),
+    sidebarUserEmail: document.getElementById('sidebarUserEmail'),
+    sidebarAuthActionBtn: document.getElementById('sidebarAuthActionBtn'),
+    sidebarAuthActionText: document.getElementById('sidebarAuthActionText'),
+    userProfileModal: document.getElementById('userProfileModal'),
+    closeProfileModalBtn: document.getElementById('closeProfileModalBtn'),
+    closeProfileBtn: document.getElementById('closeProfileBtn'),
+    signOutBtn: document.getElementById('signOutBtn'),
+    modalUserAvatar: document.getElementById('modalUserAvatar'),
+    modalUserName: document.getElementById('modalUserName'),
+    modalUserEmail: document.getElementById('modalUserEmail'),
+    modalUserUid: document.getElementById('modalUserUid'),
+    modalUserSyncState: document.getElementById('modalUserSyncState')
   };
 
   // Callback storage for generic confirmation modal
@@ -310,7 +347,7 @@
   }
 
   // ==========================================================================
-  // Firebase Realtime Cloud Synchronization
+  // Firebase Realtime Cloud Synchronization & Authentication
   // ==========================================================================
 
   const firebaseConfig = {
@@ -330,8 +367,12 @@
   let syncDocRef = null;
   let isApplyingRemoteUpdate = false;
   let syncDebounceTimer = null;
+  let currentUser = null;
 
   function getSyncKey() {
+    if (currentUser) {
+      return 'user_' + currentUser.uid;
+    }
     return localStorage.getItem(SYNC_KEY_STORAGE) || 'default_budget';
   }
 
@@ -448,7 +489,9 @@
         limit: Number(c.limit) || 0
       })),
       transactions: state.transactions,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      userUid: currentUser ? currentUser.uid : 'guest',
+      userEmail: currentUser ? currentUser.email : null
     };
 
     syncDocRef.set(payload, { merge: true })
@@ -516,6 +559,276 @@
     );
   }
 
+  // --- Authentication Management ---
+
+  function updateUserAuthUI(user) {
+    if (user) {
+      const displayName = user.displayName || (user.email ? user.email.split('@')[0] : 'Pengguna');
+      const initial = (displayName.charAt(0) || 'U').toUpperCase();
+      const email = user.email || 'Email tidak tersedia';
+
+      // Sidebar
+      if (dom.sidebarUserName) dom.sidebarUserName.textContent = displayName;
+      if (dom.sidebarUserEmail) dom.sidebarUserEmail.textContent = email;
+      if (dom.sidebarUserAvatar) dom.sidebarUserAvatar.textContent = initial;
+      if (dom.sidebarAuthActionText) dom.sidebarAuthActionText.textContent = 'Profil';
+
+      // Header
+      if (dom.headerUserName) dom.headerUserName.textContent = displayName;
+      if (dom.headerUserAvatar) dom.headerUserAvatar.textContent = initial;
+
+      // Profile Modal
+      if (dom.modalUserName) dom.modalUserName.textContent = displayName;
+      if (dom.modalUserEmail) dom.modalUserEmail.textContent = email;
+      if (dom.modalUserAvatar) dom.modalUserAvatar.textContent = initial;
+      if (dom.modalUserUid) dom.modalUserUid.textContent = user.uid;
+      if (dom.modalUserSyncState) dom.modalUserSyncState.innerHTML = '<span style="color: #10b981;">🟢 Akun Cloud Aktif</span>';
+    } else {
+      // Sidebar
+      if (dom.sidebarUserName) dom.sidebarUserName.textContent = 'Mode Tamu';
+      if (dom.sidebarUserEmail) dom.sidebarUserEmail.textContent = 'Klik untuk Masuk';
+      if (dom.sidebarUserAvatar) dom.sidebarUserAvatar.textContent = '👤';
+      if (dom.sidebarAuthActionText) dom.sidebarAuthActionText.textContent = 'Masuk';
+
+      // Header
+      if (dom.headerUserName) dom.headerUserName.textContent = 'Masuk';
+      if (dom.headerUserAvatar) dom.headerUserAvatar.textContent = '👤';
+
+      // Profile Modal
+      if (dom.modalUserName) dom.modalUserName.textContent = 'Tamu';
+      if (dom.modalUserEmail) dom.modalUserEmail.textContent = 'Belum Masuk';
+      if (dom.modalUserAvatar) dom.modalUserAvatar.textContent = '👤';
+      if (dom.modalUserUid) dom.modalUserUid.textContent = '-';
+      if (dom.modalUserSyncState) dom.modalUserSyncState.innerHTML = '<span style="color: var(--text-muted);">⚪ Belum Login</span>';
+    }
+  }
+
+  function handleAuthStateChange(user) {
+    currentUser = user;
+    updateUserAuthUI(user);
+
+    if (user) {
+      setupFirestoreListener();
+    } else {
+      setupFirestoreListener();
+    }
+  }
+
+  function openAuthModal(defaultTab = 'signin') {
+    switchAuthTab(defaultTab);
+    if (dom.authModal) dom.authModal.classList.add('open');
+  }
+
+  function closeAuthModal() {
+    if (dom.authModal) dom.authModal.classList.remove('open');
+  }
+
+  function openProfileModal() {
+    if (!currentUser) {
+      openAuthModal('signin');
+      return;
+    }
+    if (dom.userProfileModal) dom.userProfileModal.classList.add('open');
+  }
+
+  function closeProfileModal() {
+    if (dom.userProfileModal) dom.userProfileModal.classList.remove('open');
+  }
+
+  function switchAuthTab(tab) {
+    if (tab === 'signin') {
+      if (dom.tabBtnSignIn) dom.tabBtnSignIn.classList.add('active');
+      if (dom.tabBtnSignUp) dom.tabBtnSignUp.classList.remove('active');
+      if (dom.signInForm) dom.signInForm.classList.add('active');
+      if (dom.signUpForm) dom.signUpForm.classList.remove('active');
+      if (dom.authModalTitle) dom.authModalTitle.textContent = 'Masuk ke Budgetin';
+    } else {
+      if (dom.tabBtnSignUp) dom.tabBtnSignUp.classList.add('active');
+      if (dom.tabBtnSignIn) dom.tabBtnSignIn.classList.remove('active');
+      if (dom.signUpForm) dom.signUpForm.classList.add('active');
+      if (dom.signInForm) dom.signInForm.classList.remove('active');
+      if (dom.authModalTitle) dom.authModalTitle.textContent = 'Daftar Akun Baru';
+    }
+  }
+
+  function handleSignInSubmit(e) {
+    e.preventDefault();
+    if (!firebase.auth) {
+      showToast('Firebase Auth belum termuat.', 'error');
+      return;
+    }
+    const email = dom.signInEmail.value.trim();
+    const password = dom.signInPassword.value;
+
+    if (!email || !password) {
+      showToast('Mohon isi email dan password.', 'error');
+      return;
+    }
+
+    const submitBtn = dom.signInSubmitBtn;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span>Memverifikasi... ⏳</span>';
+    }
+
+    firebase.auth().signInWithEmailAndPassword(email, password)
+      .then((userCredential) => {
+        closeAuthModal();
+        dom.signInForm.reset();
+        const user = userCredential.user;
+        showToast(`Selamat datang kembali, ${user.displayName || user.email}! ✨`, 'success');
+      })
+      .catch((error) => {
+        let msg = 'Gagal masuk: ' + error.message;
+        if (error.code === 'auth/invalid-email') msg = 'Format email tidak valid.';
+        else if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+          msg = 'Email atau password salah.';
+        } else if (error.code === 'auth/too-many-requests') {
+          msg = 'Terlalu banyak percobaan gagal. Silakan coba sesaat lagi.';
+        } else if (error.code === 'auth/operation-not-allowed') {
+          msg = 'Metode Email/Password belum diaktifkan di Firebase Console -> Authentication -> Sign-in method.';
+        }
+        showToast(msg, 'error');
+      })
+      .finally(() => {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<span>Masuk ke Akun</span>';
+        }
+      });
+  }
+
+  function handleSignUpSubmit(e) {
+    e.preventDefault();
+    if (!firebase.auth) {
+      showToast('Firebase Auth belum termuat.', 'error');
+      return;
+    }
+    const name = dom.signUpName.value.trim();
+    const email = dom.signUpEmail.value.trim();
+    const password = dom.signUpPassword.value;
+    const confirmPassword = dom.signUpPasswordConfirm.value;
+
+    if (!name) {
+      showToast('Mohon masukkan nama Anda.', 'error');
+      return;
+    }
+    if (password.length < 6) {
+      showToast('Password minimal 6 karakter.', 'error');
+      return;
+    }
+    if (password !== confirmPassword) {
+      showToast('Konfirmasi password tidak cocok.', 'error');
+      return;
+    }
+
+    const submitBtn = dom.signUpSubmitBtn;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span>Mendaftarkan akun... ⏳</span>';
+    }
+
+    firebase.auth().createUserWithEmailAndPassword(email, password)
+      .then((userCredential) => {
+        const user = userCredential.user;
+        return user.updateProfile({
+          displayName: name
+        }).then(() => {
+          closeAuthModal();
+          dom.signUpForm.reset();
+          showToast(`Akun berhasil dibuat! Selamat datang, ${name} ✨`, 'success');
+        });
+      })
+      .catch((error) => {
+        let msg = 'Gagal mendaftar: ' + error.message;
+        if (error.code === 'auth/email-already-in-use') {
+          msg = 'Email ini sudah terdaftar. Silakan pilih menu Masuk.';
+        } else if (error.code === 'auth/invalid-email') {
+          msg = 'Format email tidak valid.';
+        } else if (error.code === 'auth/weak-password') {
+          msg = 'Password terlalu lemah. Minimal 6 karakter.';
+        } else if (error.code === 'auth/operation-not-allowed') {
+          msg = 'Metode Email/Password belum diaktifkan di Firebase Console -> Authentication -> Sign-in method.';
+        }
+        showToast(msg, 'error');
+      })
+      .finally(() => {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<span>Daftar Akun Baru ✨</span>';
+        }
+      });
+  }
+
+  function handleSignOut() {
+    if (!firebase.auth) return;
+    openConfirmModal(
+      'Keluar dari Akun',
+      'Apakah Anda yakin ingin keluar (Sign Out)? Data Anda tetap aman tersimpan di cloud.',
+      () => {
+        firebase.auth().signOut().then(() => {
+          closeProfileModal();
+          showToast('Anda telah keluar dari akun. Berjalan dalam Mode Tamu.', 'info');
+        }).catch((err) => {
+          showToast('Gagal keluar: ' + err.message, 'error');
+        });
+      }
+    );
+  }
+
+  function handleGoogleSignIn() {
+    if (!firebase.auth) return;
+    const provider = new firebase.auth.GoogleAuthProvider();
+    firebase.auth().signInWithPopup(provider)
+      .then((res) => {
+        closeAuthModal();
+        const user = res.user;
+        showToast(`Selamat datang, ${user.displayName || 'Pengguna'}! ✨`, 'success');
+      })
+      .catch((error) => {
+        if (error.code === 'auth/popup-closed-by-user') return;
+        if (error.code === 'auth/operation-not-allowed') {
+          showToast('Google Sign-in belum diaktifkan di Firebase Console -> Authentication.', 'error');
+        } else {
+          showToast('Gagal masuk dengan Google: ' + error.message, 'error');
+        }
+      });
+  }
+
+  function handleForgotPassword() {
+    const email = (dom.signInEmail && dom.signInEmail.value.trim()) || prompt('Masukkan alamat email akun Anda:');
+    if (!email) return;
+    if (!firebase.auth) return;
+
+    firebase.auth().sendPasswordResetEmail(email)
+      .then(() => {
+        showToast(`Tautan reset password telah dikirim ke: ${email} 📩`, 'success');
+      })
+      .catch((error) => {
+        let msg = 'Gagal mengirim reset password: ' + error.message;
+        if (error.code === 'auth/user-not-found') msg = 'Email tidak ditemukan.';
+        showToast(msg, 'error');
+      });
+  }
+
+  function setupPasswordToggles() {
+    document.querySelectorAll('.password-toggle-btn').forEach(btn => {
+      btn.addEventListener('click', function () {
+        const targetId = this.getAttribute('data-target');
+        const input = document.getElementById(targetId);
+        if (input) {
+          if (input.type === 'password') {
+            input.type = 'text';
+            this.textContent = '🙈';
+          } else {
+            input.type = 'password';
+            this.textContent = '👁️';
+          }
+        }
+      });
+    });
+  }
+
   function initFirebaseSync() {
     if (typeof firebase === 'undefined') {
       console.warn('Firebase SDK tidak dimuat.');
@@ -548,7 +861,14 @@
         // safe to ignore
       }
 
-      setupFirestoreListener();
+      // Initialize Auth Listener
+      if (firebase.auth) {
+        firebase.auth().onAuthStateChanged((user) => {
+          handleAuthStateChange(user);
+        });
+      } else {
+        setupFirestoreListener();
+      }
     } catch (err) {
       console.error('Inisialisasi Firebase gagal:', err);
       updateSyncStatusUI('offline', 'Gagal Sambung Firebase');
@@ -1891,7 +2211,7 @@
     }
 
     // Close modals on backdrop click
-    [dom.expenseModal, dom.categoryLimitModal, dom.confirmModal].forEach(modal => {
+    [dom.expenseModal, dom.categoryLimitModal, dom.confirmModal, dom.authModal, dom.userProfileModal].forEach(modal => {
       if (modal) {
         modal.addEventListener('click', function (e) {
           if (e.target === this) {
@@ -2103,6 +2423,29 @@
     }
     if (dom.btnManualSync) dom.btnManualSync.addEventListener('click', handleManualSync);
     if (dom.btnUploadLocalToCloud) dom.btnUploadLocalToCloud.addEventListener('click', handleUploadLocalToCloud);
+
+    // 12. Authentication & User Profile Listeners
+    if (dom.headerAuthBtn) dom.headerAuthBtn.addEventListener('click', openProfileModal);
+    if (dom.sidebarUserProfileCard) dom.sidebarUserProfileCard.addEventListener('click', openProfileModal);
+    if (dom.sidebarAuthActionBtn) {
+      dom.sidebarAuthActionBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        openProfileModal();
+      });
+    }
+    if (dom.closeAuthModalBtn) dom.closeAuthModalBtn.addEventListener('click', closeAuthModal);
+    if (dom.tabBtnSignIn) dom.tabBtnSignIn.addEventListener('click', () => switchAuthTab('signin'));
+    if (dom.tabBtnSignUp) dom.tabBtnSignUp.addEventListener('click', () => switchAuthTab('signup'));
+    if (dom.signInForm) dom.signInForm.addEventListener('submit', handleSignInSubmit);
+    if (dom.signUpForm) dom.signUpForm.addEventListener('submit', handleSignUpSubmit);
+    if (dom.btnGoogleSignIn) dom.btnGoogleSignIn.addEventListener('click', handleGoogleSignIn);
+    if (dom.btnContinueGuest) dom.btnContinueGuest.addEventListener('click', closeAuthModal);
+    if (dom.forgotPasswordBtn) dom.forgotPasswordBtn.addEventListener('click', handleForgotPassword);
+    if (dom.closeProfileModalBtn) dom.closeProfileModalBtn.addEventListener('click', closeProfileModal);
+    if (dom.closeProfileBtn) dom.closeProfileBtn.addEventListener('click', closeProfileModal);
+    if (dom.signOutBtn) dom.signOutBtn.addEventListener('click', handleSignOut);
+
+    setupPasswordToggles();
   }
 
   // Expose global methods for inline HTML onclick handlers
@@ -2118,7 +2461,9 @@
       }
     },
     syncCloudNow: handleManualSync,
-    uploadLocalToCloud: handleUploadLocalToCloud
+    uploadLocalToCloud: handleUploadLocalToCloud,
+    openAuth: openAuthModal,
+    openProfile: openProfileModal
   };
 
   // --- Bootstrap App ---
